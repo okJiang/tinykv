@@ -69,9 +69,11 @@ func CreateDB(path string, raft bool) *badger.DB {
 	}
 	opts.Dir = path
 	opts.ValueDir = opts.Dir
+	// log.Info("Start Mkdir:", path)
 	if err := os.MkdirAll(opts.Dir, os.ModePerm); err != nil {
 		log.Fatal(err)
 	}
+	// log.Info("Success Mkdir:", path)
 	db, err := badger.Open(opts)
 	if err != nil {
 		log.Fatal(err)

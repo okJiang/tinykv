@@ -205,6 +205,7 @@ func TestRawNodeRestart2AC(t *testing.T) {
 		t.Fatal(err)
 	}
 	rd := rawNode.Ready()
+	// fmt.Printf("Ready: %+v\n", rd)
 	if !reflect.DeepEqual(rd, want) {
 		t.Errorf("g = %+v,\n             w   %+v", rd, want)
 	}

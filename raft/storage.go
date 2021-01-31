@@ -117,7 +117,7 @@ func (ms *MemoryStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 	if hi > ms.lastIndex()+1 {
 		log.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
 	}
-
+	// fmt.Println(lo, hi, offset)
 	ents := ms.ents[lo-offset : hi-offset]
 	if len(ms.ents) == 1 && len(ents) != 0 {
 		// only contains dummy entries.
@@ -259,8 +259,10 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	}
 
 	offset := entries[0].Index - ms.ents[0].Index
+	// log.Infof("AppendEntry[0].Index: %d, storageEnts[0].Index: %d\n", entries[0].Index, ms.ents[0].Index)
 	switch {
 	case uint64(len(ms.ents)) > offset:
+		// 把 ms.ents 中 [offset:] 的删掉
 		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
 		ms.ents = append(ms.ents, entries...)
 	case uint64(len(ms.ents)) == offset:

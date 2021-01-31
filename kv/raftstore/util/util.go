@@ -131,6 +131,7 @@ func CheckRegionEpoch(req *raft_cmdpb.RaftCmdRequest, region *metapb.Region, inc
 	return nil
 }
 
+// FindPeer find peer by region and storeID
 func FindPeer(region *metapb.Region, storeID uint64) *metapb.Peer {
 	for _, peer := range region.Peers {
 		if peer.StoreId == storeID {

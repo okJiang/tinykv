@@ -133,6 +133,7 @@ func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, r
 		Storage:       ps,
 	}
 
+	// log.Infof("raftCfg: %+v", raftCfg)
 	raftGroup, err := raft.NewRawNode(raftCfg)
 	if err != nil {
 		return nil, err
@@ -264,6 +265,7 @@ func (p *peer) IsLeader() bool {
 	return p.RaftGroup.Raft.State == raft.StateLeader
 }
 
+// Send send msgs by transport
 func (p *peer) Send(trans Transport, msgs []eraftpb.Message) {
 	for _, msg := range msgs {
 		err := p.sendRaftMessage(msg, trans)

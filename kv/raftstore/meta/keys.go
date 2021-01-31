@@ -70,18 +70,22 @@ func RegionRaftPrefixKey(regionID uint64) []byte {
 	return key
 }
 
+// RaftLogKey generate the RaftLog key by regionID and logIndex
 func RaftLogKey(regionID, index uint64) []byte {
 	return makeRegionKey(regionID, RaftLogSuffix, index)
 }
 
+// RaftStateKey generate the RaftState key by regionID
 func RaftStateKey(regionID uint64) []byte {
 	return makeRegionPrefix(regionID, RaftStateSuffix)
 }
 
+// ApplyStateKey generate the ApplyState key by regionID
 func ApplyStateKey(regionID uint64) []byte {
 	return makeRegionPrefix(regionID, ApplyStateSuffix)
 }
 
+// IsRaftStateKey determine if the key is a RaftStateKey
 func IsRaftStateKey(key []byte) bool {
 	return len(key) == 11 && key[0] == LocalPrefix && key[1] == RegionRaftPrefix
 }

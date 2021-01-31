@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Connor1996/badger"
 	"github.com/Connor1996/badger/y"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
@@ -38,11 +40,87 @@ func newPeerMsgHandler(peer *peer, ctx *GlobalContext) *peerMsgHandler {
 	}
 }
 
+// seekCallback seek the callback by index and term
+func seekCallback(peer *peer, index, term uint64) *message.Callback {
+	for _, proposal := range peer.proposals {
+		if proposal.index == index && proposal.term == term {
+			return proposal.cb
+		}
+	}
+	return nil
+}
+
+// deleteCallback delete the callback by index and term
+func deleteCallback(peer *peer, index, term uint64) {
+	for i, proposal := range peer.proposals {
+		if proposal.index == index && proposal.term == term {
+			peer.proposals = append(peer.proposals[:i], peer.proposals[i+1:]...)
+			return
+		}
+	}
+}
+
 func (d *peerMsgHandler) HandleRaftReady() {
 	if d.stopped {
 		return
 	}
 	// Your Code Here (2B).
+	rn := d.peer.RaftGroup
+
+	if rn.HasReady() {
+		rd := rn.Ready()
+		// log.Infof("peerId: %d, start ready: %+v\n", d.PeerId(), rd)
+		d.peer.peerStorage.SaveReadyState(&rd)
+
+		// 假设 Term 发生了变化，即 leader 发生了改变
+		for i, proposal := range d.peer.proposals {
+			if proposal.term < rd.Term {
+				// delete the proposal
+				d.peer.proposals = append(d.peer.proposals[:i], d.peer.proposals[i+1:]...)
+				// return the error callback
+				NotifyStaleReq(rd.Term, proposal.cb)
+			}
+		}
+
+		d.peer.Send(d.ctx.trans, rd.Messages)
+
+		for _, entry := range rd.CommittedEntries {
+			// process(entry)
+			kvWb := new(engine_util.WriteBatch)
+
+			data := new(raft_cmdpb.RaftCmdRequest)
+			err := data.Unmarshal(entry.Data)
+			if err != nil {
+				continue
+			}
+
+			cb := seekCallback(d.peer, entry.GetIndex(), entry.GetTerm())
+			cmdResp := &raft_cmdpb.RaftCmdResponse{}
+			cmdResp.Header = &raft_cmdpb.RaftResponseHeader{CurrentTerm: rn.Raft.Term}
+
+			for _, req := range data.GetRequests() {
+				resp := &raft_cmdpb.Response{CmdType: req.CmdType}
+				switch req.CmdType {
+				case raft_cmdpb.CmdType_Get:
+					resp.Get.Value, _ = engine_util.GetCF(d.ctx.engine.Kv, req.Get.Cf, req.Get.Key)
+				case raft_cmdpb.CmdType_Put:
+					kvWb.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
+				case raft_cmdpb.CmdType_Delete:
+					kvWb.DeleteCF(req.Delete.Cf, req.Delete.Key)
+				case raft_cmdpb.CmdType_Snap:
+				}
+				cmdResp.Responses = append(cmdResp.Responses, resp)
+			}
+			d.peer.peerStorage.Engines.WriteKV(kvWb)
+
+			if cb != nil {
+				cb.Done(cmdResp)
+				deleteCallback(d.peer, entry.GetIndex(), entry.GetTerm())
+			}
+		}
+
+		rn.Advance(rd)
+	}
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -107,6 +185,16 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 	return err
 }
 
+// checkRead check if all requests type are Get
+func checkRead(reqs []*raft_cmdpb.Request) bool {
+	for _, req := range reqs {
+		if req.CmdType != raft_cmdpb.CmdType_Get {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	err := d.preProposeRaftCommand(msg)
 	if err != nil {
@@ -114,6 +202,37 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+	if checkRead(msg.Requests) {
+		cmdResp := &raft_cmdpb.RaftCmdResponse{}
+		cmdResp.Header.CurrentTerm = d.Term()
+		_ = d.ctx.engine.Kv.View(func(txn *badger.Txn) error {
+			for _, req := range msg.Requests {
+				resp := &raft_cmdpb.Response{CmdType: req.CmdType}
+				resp.Get.Value, _ = engine_util.GetCFFromTxn(txn, req.Get.Cf, req.Get.Key)
+				cmdResp.Responses = append(cmdResp.Responses, resp)
+			}
+			return nil
+		})
+		cb.Done(cmdResp)
+		return
+	} else if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
+		cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
+		resp := &raft_cmdpb.SnapResponse{Region: d.peerStorage.region}
+		cb.Done(&raft_cmdpb.RaftCmdResponse{
+			Header:    &raft_cmdpb.RaftResponseHeader{},
+			Responses: []*raft_cmdpb.Response{{CmdType: raft_cmdpb.CmdType_Snap, Snap: resp}},
+		})
+		return
+	}
+
+	cmd, _ := msg.Marshal()
+	d.peer.proposals = append(d.peer.proposals, &proposal{
+		index: d.peer.nextProposalIndex(),
+		term:  d.Term(),
+		cb:    cb,
+	})
+	d.peer.RaftGroup.Propose(cmd)
+
 }
 
 func (d *peerMsgHandler) onTick() {
@@ -150,7 +269,7 @@ func (d *peerMsgHandler) onRaftBaseTick() {
 	d.ticker.schedule(PeerTickRaft)
 }
 
-func (d *peerMsgHandler) ScheduleCompactLog(truncatedIndex uint64) {
+func (d *peerMsgHandler) ScheduleCompactLog(firstIndex uint64, truncatedIndex uint64) {
 	raftLogGCTask := &runner.RaftLogGCTask{
 		RaftEngine: d.ctx.engine.Raft,
 		RegionID:   d.regionId,
@@ -284,8 +403,8 @@ func handleStaleMsg(trans Transport, msg *rspb.RaftMessage, curEpoch *metapb.Reg
 	}
 	gcMsg := &rspb.RaftMessage{
 		RegionId:    regionID,
-		FromPeer:    toPeer,
-		ToPeer:      fromPeer,
+		FromPeer:    fromPeer,
+		ToPeer:      toPeer,
 		RegionEpoch: curEpoch,
 		IsTombstone: true,
 	}

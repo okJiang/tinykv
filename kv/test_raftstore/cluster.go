@@ -56,6 +56,8 @@ func (c *Cluster) Start() {
 	clusterID := c.schedulerClient.GetClusterID(ctx)
 
 	for storeID := uint64(1); storeID <= uint64(c.count); storeID++ {
+		// 在默认路径下创建临时目录
+		// log.Info("Start mk tempdir")
 		dbPath, err := ioutil.TempDir("", "test-raftstore")
 		if err != nil {
 			panic(err)
@@ -209,6 +211,7 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 	startTime := time.Now()
 	regionID := request.Header.RegionId
 	leader := c.LeaderOfRegion(regionID)
+	// log.Infof("get leader: %d of region %d\n", leader, regionID)
 	for {
 		if time.Now().Sub(startTime) > timeout {
 			return nil, nil

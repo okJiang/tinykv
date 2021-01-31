@@ -24,14 +24,6 @@ import (
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
-// returns a new MemoryStorage with only ents filled
-func newMemoryStorageWithEnts(ents []pb.Entry) *MemoryStorage {
-	return &MemoryStorage{
-		ents:     ents,
-		snapshot: pb.Snapshot{Metadata: &pb.SnapshotMetadata{ConfState: &pb.ConfState{}}},
-	}
-}
-
 // nextEnts returns the appliable entries and updates the applied index
 func nextEnts(r *Raft, s *MemoryStorage) (ents []pb.Entry) {
 	// Transfer all unstable entries to "stable" storage.
@@ -64,7 +56,7 @@ func TestProgressLeader2AB(t *testing.T) {
 	propMsg := pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("foo")}}}
 	for i := 0; i < 5; i++ {
 		if pr := r.Prs[r.id]; pr.Match != uint64(i+1) || pr.Next != pr.Match+1 {
-			t.Errorf("unexpected progress %v", pr)
+			t.Errorf("#%d: unexpected progress %v", i, pr)
 		}
 		if err := r.Step(propMsg); err != nil {
 			t.Fatalf("proposal resulted in error: %v", err)
@@ -106,7 +98,7 @@ func TestLeaderCycle2AA(t *testing.T) {
 	n := newNetworkWithConfig(cfg, nil, nil, nil)
 	for campaignerID := uint64(1); campaignerID <= 3; campaignerID++ {
 		n.send(pb.Message{From: campaignerID, To: campaignerID, MsgType: pb.MessageType_MsgHup})
-
+		// fmt.Println("campaignerID:", campaignerID)
 		for _, peer := range n.peers {
 			sm := peer.(*Raft)
 			if sm.id == campaignerID && sm.State != StateLeader {
@@ -118,6 +110,7 @@ func TestLeaderCycle2AA(t *testing.T) {
 					campaignerID, sm.id, sm.State)
 			}
 		}
+		// fmt.Println("campaignerID:", campaignerID, "Over!")
 	}
 }
 
@@ -176,6 +169,7 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	for i := range n.peers {
 		sm := n.peers[i].(*Raft)
 		entries := sm.RaftLog.entries
+		// fmt.Printf("node %d, entries: %+v\n", i, entries)
 		if len(entries) != 2 {
 			t.Fatalf("node %d: len(entries) == %d, want 2", i, len(entries))
 		}
@@ -236,7 +230,7 @@ func TestVoteFromAnyState2AA(t *testing.T) {
 
 		// If this was a vote, we reset our state and term.
 		if r.State != StateFollower {
-			t.Errorf("%s,%s: state %s, want %s", vt, st, r.State, StateFollower)
+			t.Errorf("%s,%s: state %v, want %v", vt, st, r.State, StateFollower)
 		}
 		if r.Term != newTerm {
 			t.Errorf("%s,%s: term %d, want %d", vt, st, r.Term, newTerm)
@@ -287,6 +281,7 @@ func TestLogReplication2AB(t *testing.T) {
 
 			ents := []pb.Entry{}
 			for _, e := range nextEnts(sm, tt.network.storage[j]) {
+				// fmt.Printf("#%d, ent: %+v", j, e)
 				if e.Data != nil {
 					ents = append(ents, e)
 				}
@@ -298,6 +293,7 @@ func TestLogReplication2AB(t *testing.T) {
 				}
 			}
 			for k, m := range props {
+				// fmt.Println(len(ents), len(m.Entries))
 				if !bytes.Equal(ents[k].Data, m.Entries[0].Data) {
 					t.Errorf("#%d.%d: data = %d, want %d", i, j, ents[k].Data, m.Entries[0].Data)
 				}
@@ -360,17 +356,17 @@ func TestDuelingCandidates2AB(t *testing.T) {
 
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 	nt.send(pb.Message{From: 3, To: 3, MsgType: pb.MessageType_MsgHup})
-
+	// fmt.Println("----------fengexian------------")
 	// 1 becomes leader since it receives votes from 1 and 2
 	sm := nt.peers[1].(*Raft)
 	if sm.State != StateLeader {
-		t.Errorf("state = %s, want %s", sm.State, StateLeader)
+		t.Errorf("state = %v, want %v", sm.State, StateLeader)
 	}
 
 	// 3 stays as candidate since it receives a vote from 3 and a rejection from 2
 	sm = nt.peers[3].(*Raft)
 	if sm.State != StateCandidate {
-		t.Errorf("state = %s, want %s", sm.State, StateCandidate)
+		t.Errorf("state = %v, want %v", sm.State, StateCandidate)
 	}
 
 	nt.recover()
@@ -380,7 +376,7 @@ func TestDuelingCandidates2AB(t *testing.T) {
 	// 3 will be follower again since both 1 and 2 rejects its vote request since 3 does not have a long enough log
 	nt.send(pb.Message{From: 3, To: 3, MsgType: pb.MessageType_MsgHup})
 
-	wlog := newLog(newMemoryStorageWithEnts([]pb.Entry{{}, {Data: nil, Term: 1, Index: 1}}))
+	wlog := newLog(&MemoryStorage{ents: []pb.Entry{{}, {Data: nil, Term: 1, Index: 1}}})
 	wlog.committed = 1
 	tests := []struct {
 		sm      *Raft
@@ -432,12 +428,12 @@ func TestCandidateConcede2AB(t *testing.T) {
 
 	a := tt.peers[1].(*Raft)
 	if g := a.State; g != StateFollower {
-		t.Errorf("state = %s, want %s", g, StateFollower)
+		t.Errorf("state = %v, want %v", g, StateFollower)
 	}
 	if g := a.Term; g != 1 {
 		t.Errorf("term = %d, want %d", g, 1)
 	}
-	wlog := newLog(newMemoryStorageWithEnts([]pb.Entry{{}, {Data: nil, Term: 1, Index: 1}, {Term: 1, Index: 2, Data: data}}))
+	wlog := newLog(&MemoryStorage{ents: []pb.Entry{{}, {Data: nil, Term: 1, Index: 1}, {Term: 1, Index: 2, Data: data}}})
 	wlog.committed = 2
 	wantLog := ltoa(wlog)
 	for i, p := range tt.peers {
@@ -516,7 +512,7 @@ func TestProposal2AB(t *testing.T) {
 
 		wantLog := newLog(NewMemoryStorage())
 		if tt.success {
-			wantLog = newLog(newMemoryStorageWithEnts([]pb.Entry{{}, {Data: nil, Term: 1, Index: 1}, {Term: 1, Index: 2, Data: data}}))
+			wantLog = newLog(&MemoryStorage{ents: []pb.Entry{{}, {Data: nil, Term: 1, Index: 1}, {Term: 1, Index: 2, Data: data}}})
 			wantLog.committed = 2
 		}
 		base := ltoa(wantLog)
@@ -637,7 +633,7 @@ func TestRecvMessageType_MsgRequestVote2AA(t *testing.T) {
 		sm := newTestRaft(1, []uint64{1}, 10, 1, NewMemoryStorage())
 		sm.State = tt.state
 		sm.Vote = tt.voteFor
-		sm.RaftLog = newLog(newMemoryStorageWithEnts([]pb.Entry{{}, {Index: 1, Term: 2}, {Index: 2, Term: 2}}))
+		sm.RaftLog = newLog(&MemoryStorage{ents: []pb.Entry{{}, {Index: 1, Term: 2}, {Index: 2, Term: 2}}})
 
 		// raft.Term is greater than or equal to raft.RaftLog.lastTerm. In this
 		// test we're only testing MessageType_MsgRequestVote responses when the campaigning node
@@ -656,6 +652,7 @@ func TestRecvMessageType_MsgRequestVote2AA(t *testing.T) {
 		sm.Step(pb.Message{MsgType: msgType, Term: term, From: 2, Index: tt.index, LogTerm: tt.logTerm})
 
 		msgs := sm.readMessages()
+		// fmt.Printf("Msg: %+v\n", msgs)
 		if g := len(msgs); g != 1 {
 			t.Fatalf("#%d: len(msgs) = %d, want 1", i, g)
 			continue
@@ -743,13 +740,13 @@ func testCandidateResetTerm(t *testing.T, mt pb.MessageType) {
 
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 	if a.State != StateLeader {
-		t.Errorf("state = %s, want %s", a.State, StateLeader)
+		t.Errorf("state = %v, want %v", a.State, StateLeader)
 	}
 	if b.State != StateFollower {
-		t.Errorf("state = %s, want %s", b.State, StateFollower)
+		t.Errorf("state = %v, want %v", b.State, StateFollower)
 	}
 	if c.State != StateFollower {
-		t.Errorf("state = %s, want %s", c.State, StateFollower)
+		t.Errorf("state = %v, want %v", c.State, StateFollower)
 	}
 
 	// isolate 3 and increase term in rest
@@ -759,10 +756,10 @@ func testCandidateResetTerm(t *testing.T, mt pb.MessageType) {
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
 	if a.State != StateLeader {
-		t.Errorf("state = %s, want %s", a.State, StateLeader)
+		t.Errorf("state = %v, want %v", a.State, StateLeader)
 	}
 	if b.State != StateFollower {
-		t.Errorf("state = %s, want %s", b.State, StateFollower)
+		t.Errorf("state = %v, want %v", b.State, StateFollower)
 	}
 
 	for c.State != StateCandidate {
@@ -776,7 +773,7 @@ func testCandidateResetTerm(t *testing.T, mt pb.MessageType) {
 	nt.send(pb.Message{From: 1, To: 3, Term: a.Term, MsgType: mt})
 
 	if c.State != StateFollower {
-		t.Errorf("state = %s, want %s", c.State, StateFollower)
+		t.Errorf("state = %v, want %v", c.State, StateFollower)
 	}
 
 	// follower c term is reset with leader's
@@ -808,13 +805,13 @@ func TestDisruptiveFollower2AA(t *testing.T) {
 	// n2.State == StateFollower
 	// n3.State == StateFollower
 	if n1.State != StateLeader {
-		t.Fatalf("node 1 state: %s, want %s", n1.State, StateLeader)
+		t.Fatalf("node 1 state: %v, want %v", n1.State, StateLeader)
 	}
 	if n2.State != StateFollower {
-		t.Fatalf("node 2 state: %s, want %s", n2.State, StateFollower)
+		t.Fatalf("node 2 state: %v, want %v", n2.State, StateFollower)
 	}
 	if n3.State != StateFollower {
-		t.Fatalf("node 3 state: %s, want %s", n3.State, StateFollower)
+		t.Fatalf("node 3 state: %v, want %v", n3.State, StateFollower)
 	}
 
 	// etcd server "advanceTicksForElection" on restart;
@@ -833,13 +830,13 @@ func TestDisruptiveFollower2AA(t *testing.T) {
 	// n2.State == StateFollower
 	// n3.State == StateCandidate
 	if n1.State != StateLeader {
-		t.Fatalf("node 1 state: %s, want %s", n1.State, StateLeader)
+		t.Fatalf("node 1 state: %v, want %v", n1.State, StateLeader)
 	}
 	if n2.State != StateFollower {
-		t.Fatalf("node 2 state: %s, want %s", n2.State, StateFollower)
+		t.Fatalf("node 2 state: %v, want %v", n2.State, StateFollower)
 	}
 	if n3.State != StateCandidate {
-		t.Fatalf("node 3 state: %s, want %s", n3.State, StateCandidate)
+		t.Fatalf("node 3 state: %v, want %v", n3.State, StateCandidate)
 	}
 	// check term
 	// n1.Term == 2
@@ -868,7 +865,7 @@ func TestDisruptiveFollower2AA(t *testing.T) {
 
 	// check state
 	if n1.State != StateFollower {
-		t.Fatalf("node 1 state: %s, want %s", n1.State, StateFollower)
+		t.Fatalf("node 1 state: %v, want %v", n1.State, StateFollower)
 	}
 
 	// check term
@@ -936,11 +933,11 @@ func TestRecvMessageType_MsgBeat2AA(t *testing.T) {
 
 	for i, tt := range tests {
 		sm := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
-		sm.RaftLog = newLog(newMemoryStorageWithEnts([]pb.Entry{{}, {Index: 1, Term: 0}, {Index: 2, Term: 1}}))
+		sm.RaftLog = newLog(&MemoryStorage{ents: []pb.Entry{{}, {Index: 1, Term: 0}, {Index: 2, Term: 1}}})
 		sm.Term = 1
 		sm.State = tt.state
+		// fmt.Println("#", i, "state:", tt.state)
 		sm.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
-
 		msgs := sm.readMessages()
 		if len(msgs) != tt.wMsg {
 			t.Errorf("%d: len(msgs) = %d, want %d", i, len(msgs), tt.wMsg)
@@ -1004,7 +1001,6 @@ func TestRestoreIgnoreSnapshot2C(t *testing.T) {
 	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
 	sm.RaftLog.committed = 3
 
-	wcommit := uint64(3)
 	commit := uint64(1)
 	s := pb.Snapshot{
 		Metadata: &pb.SnapshotMetadata{
@@ -1016,8 +1012,8 @@ func TestRestoreIgnoreSnapshot2C(t *testing.T) {
 
 	// ignore snapshot
 	sm.handleSnapshot(pb.Message{Snapshot: &s})
-	if sm.RaftLog.committed != wcommit {
-		t.Errorf("commit = %d, want %d", sm.RaftLog.committed, wcommit)
+	if sm.RaftLog.committed == commit {
+		t.Errorf("commit = %d, want %d", sm.RaftLog.committed, commit)
 	}
 }
 
@@ -1455,11 +1451,11 @@ func TestSplitVote2AA(t *testing.T) {
 	// n3 == candidate
 	sm = nt.peers[2].(*Raft)
 	if sm.State != StateCandidate {
-		t.Errorf("peer 2 state: %s, want %s", sm.State, StateCandidate)
+		t.Errorf("peer 2 state: %v, want %v", sm.State, StateCandidate)
 	}
 	sm = nt.peers[3].(*Raft)
 	if sm.State != StateCandidate {
-		t.Errorf("peer 3 state: %s, want %s", sm.State, StateCandidate)
+		t.Errorf("peer 3 state: %v, want %v", sm.State, StateCandidate)
 	}
 
 	// node 2 election timeout first
@@ -1482,11 +1478,11 @@ func TestSplitVote2AA(t *testing.T) {
 	// n3 == follower
 	sm = nt.peers[2].(*Raft)
 	if sm.State != StateLeader {
-		t.Errorf("peer 2 state: %s, want %s", sm.State, StateLeader)
+		t.Errorf("peer 2 state: %v, want %v", sm.State, StateLeader)
 	}
 	sm = nt.peers[3].(*Raft)
 	if sm.State != StateFollower {
-		t.Errorf("peer 3 state: %s, want %s", sm.State, StateFollower)
+		t.Errorf("peer 3 state: %v, want %v", sm.State, StateFollower)
 	}
 }
 
@@ -1551,6 +1547,7 @@ func newNetworkWithConfig(configFunc func(*Config), peers ...stateMachine) *netw
 		id := peerAddrs[j]
 		switch v := p.(type) {
 		case nil:
+			// nil 表示新建一个 Raft
 			nstorage[id] = NewMemoryStorage()
 			cfg := newTestConfig(id, peerAddrs, 10, 1, nstorage[id])
 			if configFunc != nil {
@@ -1559,9 +1556,11 @@ func newNetworkWithConfig(configFunc func(*Config), peers ...stateMachine) *netw
 			sm := newRaft(cfg)
 			npeers[id] = sm
 		case *Raft:
+			// *Raft 表示传递一个现有的 Raft 进来
 			v.id = id
 			npeers[id] = v
 		case *blackHole:
+			// *blackHole 表示啥都没有
 			npeers[id] = v
 		default:
 			panic(fmt.Sprintf("unexpected state machine type: %T", p))
@@ -1580,7 +1579,9 @@ func (nw *network) send(msgs ...pb.Message) {
 		m := msgs[0]
 		p := nw.peers[m.To]
 		p.Step(m)
+		// fmt.Println("pre: ", len(msgs))
 		msgs = append(msgs[1:], nw.filter(p.readMessages())...)
+		// fmt.Println("next:", len(msgs))
 	}
 }
 
@@ -1618,6 +1619,7 @@ func (nw *network) filter(msgs []pb.Message) []pb.Message {
 		if nw.ignorem[m.MsgType] {
 			continue
 		}
+		// fmt.Printf("%v\n", m.MsgType)
 		switch m.MsgType {
 		case pb.MessageType_MsgHup:
 			// hups never go over the network, so don't drop them but panic

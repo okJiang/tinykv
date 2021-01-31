@@ -51,8 +51,10 @@ func (rw *raftWorker) run(closeCh <-chan struct{}, wg *sync.WaitGroup) {
 			if peerState == nil {
 				continue
 			}
+			// log.Infof("peerId: %d, MsgType: %+v\n", peerState.peer.PeerId(), msg.Type)
 			newPeerMsgHandler(peerState.peer, rw.ctx).HandleMsg(msg)
 		}
+		// log.Infof("Handle Msgs Over!\n")
 		for _, peerState := range peerStateMap {
 			newPeerMsgHandler(peerState.peer, rw.ctx).HandleRaftReady()
 		}

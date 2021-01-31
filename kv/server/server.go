@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pingcap-incubator/tinykv/kv/coprocessor"
 	"github.com/pingcap-incubator/tinykv/kv/storage"
@@ -27,6 +28,7 @@ type Server struct {
 }
 
 func NewServer(storage storage.Storage) *Server {
+	// fmt.Println("server create!")
 	return &Server{
 		storage: storage,
 		Latches: latches.NewLatches(),
@@ -38,22 +40,81 @@ func NewServer(storage storage.Storage) *Server {
 // Raw API.
 func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kvrpcpb.RawGetResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	// fmt.Println("Server RawGet Start!")
+	reader, _ := server.storage.Reader(nil)
+	val, err := reader.GetCF(req.Cf, req.Key)
+	resp := &kvrpcpb.RawGetResponse{
+		Value:    val,
+		NotFound: false,
+	}
+	if val == nil {
+		resp.NotFound = true
+	}
+	// fmt.Println("Server RawGet End!")
+	return resp, err
 }
 
 func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kvrpcpb.RawPutResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	// fmt.Println("Server RawPut Start!")
+	err := server.storage.Write(nil, []storage.Modify{
+		{
+			Data: storage.Put{
+				Cf:    req.Cf,
+				Key:   req.Key,
+				Value: req.Value,
+			},
+		},
+	})
+	// fmt.Println("Server RawPut End!")
+	return nil, err
 }
 
 func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest) (*kvrpcpb.RawDeleteResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	// fmt.Println("Server RawDelete Start!")
+	err := server.storage.Write(nil, []storage.Modify{
+		{
+			Data: storage.Delete{
+				Cf:  req.Cf,
+				Key: req.Key,
+			},
+		},
+	})
+	// fmt.Println("Server RawDelete Start!")
+	return nil, err
 }
 
 func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*kvrpcpb.RawScanResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	// fmt.Println("Server RawScan Start!")
+	reader, _ := server.storage.Reader(nil)
+	defer reader.Close()
+	it := reader.IterCF(req.Cf)
+	defer it.Close()
+	resp := &kvrpcpb.RawScanResponse{}
+	cnt := 0
+	for it.Seek(req.StartKey); it.Valid(); it.Next() {
+		if cnt == int(req.Limit) {
+			break
+		}
+		cnt++
+		item := it.Item()
+		key := item.Key()
+		value, err := item.Value()
+		if err != nil {
+			break
+		}
+		fmt.Println(key)
+		kvPair := &kvrpcpb.KvPair{
+			Key:   key,
+			Value: value,
+		}
+		resp.Kvs = append(resp.Kvs, kvPair)
+	}
+
+	// fmt.Println("Server RawScan End!")
+	return resp, nil
 }
 
 // Raft commands (tinykv <-> tinykv)

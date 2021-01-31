@@ -308,10 +308,15 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 // never be committed
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
 	// Your Code Here (2B).
+	for _, ent := range entries {
+		key := meta.RaftLogKey(ps.region.GetId(), ent.Index)
+		raftWB.SetMeta(key, &ent)
+	}
+
 	return nil
 }
 
-// Apply the peer with given snapshot
+// ApplySnapshot apply the peer with given snapshot
 func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_util.WriteBatch, raftWB *engine_util.WriteBatch) (*ApplySnapResult, error) {
 	log.Infof("%v begin to apply snapshot", ps.Tag)
 	snapData := new(rspb.RaftSnapshotData)
@@ -326,14 +331,29 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	return nil, nil
 }
 
-// Save memory states to disk.
+// SaveReadyState save memory states to disk.
 // Do not modify ready in this function, this is a requirement to advance the ready object properly later.
 func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, error) {
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
+	raftWB := new(engine_util.WriteBatch)
+	_ = ps.Append(ready.Entries, raftWB)
+
+	// TODO: delete log entries that will never be committed
+
+	if !raft.IsEmptyHardState(ready.HardState) {
+		ps.raftState.HardState = &ready.HardState
+		raftWB.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
+	}
+
+	ps.Engines.WriteRaft(raftWB)
+
+	// kvWB := new(engine_util.WriteBatch)
+	// result, _ := ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
 	return nil, nil
 }
 
+// ClearData clear all data
 func (ps *PeerStorage) ClearData() {
 	ps.clearRange(ps.region.GetId(), ps.region.GetStartKey(), ps.region.GetEndKey())
 }

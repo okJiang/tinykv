@@ -36,10 +36,10 @@ func SpawnClientsAndWait(t *testing.T, ch chan bool, ncli int, fn func(me int, t
 		ca[cli] = make(chan bool)
 		go runClient(t, cli, ca[cli], fn)
 	}
-	// log.Printf("SpawnClientsAndWait: waiting for clients")
+	// log.Infof("SpawnClientsAndWait: waiting for clients")
 	for cli := 0; cli < ncli; cli++ {
 		ok := <-ca[cli]
-		// log.Infof("SpawnClientsAndWait: client %d is done\n", cli)
+		log.Infof("SpawnClientsAndWait: client %d is done\n", cli)
 		if ok == false {
 			t.Fatalf("failure")
 		}
@@ -205,28 +205,32 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 	for i := 0; i < nclients; i++ {
 		clnts[i] = make(chan int, 1)
 	}
+	// 为什么要循环三次？
 	for i := 0; i < 3; i++ {
-		// log.Printf("Iteration %v\n", i)
-		atomic.StoreInt32(&done_clients, 0)
-		atomic.StoreInt32(&done_partitioner, 0)
+		log.Infof("Iteration %v\n", i)
+		atomic.StoreInt32(&done_clients, 0)     // 归零 reset
+		atomic.StoreInt32(&done_partitioner, 0) // 归零 reset
 		go SpawnClientsAndWait(t, ch_clients, nclients, func(cli int, t *testing.T) {
 			j := 0
 			defer func() {
 				clnts[cli] <- j
 			}()
 			last := ""
+			// 下面的循环在什么时候停止
+			// 在 5s 后停止
+			// 下面进行 Put 和 Scan 的测试
 			for atomic.LoadInt32(&done_clients) == 0 {
 				if (rand.Int() % 1000) < 500 {
 					key := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)
 					value := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
-					// log.Infof("%d: client new put %v,%v\n", cli, key, value)
+					log.Infof("%d: client new put %v,%v\n", cli, key, value)
 					cluster.MustPut([]byte(key), []byte(value))
 					last = NextValue(last, value)
 					j++
 				} else {
 					start := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", 0)
 					end := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)
-					// log.Infof("%d: client new scan %v-%v\n", cli, start, end)
+					log.Infof("%d: client new scan %v-%v\n", cli, start, end)
 					values := cluster.Scan([]byte(start), []byte(end))
 					v := string(bytes.Join(values, []byte("")))
 					if v != last {
@@ -281,7 +285,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		}
 
 		for cli := 0; cli < nclients; cli++ {
-			// log.Printf("read from clients %d\n", cli)
+			log.Infof("read from clients %d\n", cli)
 			j := <-clnts[cli]
 
 			// if j < 10 {

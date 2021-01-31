@@ -76,7 +76,7 @@ func testUpdateTermFromMessage(t *testing.T, state StateType) {
 func TestStartAsFollower2AA(t *testing.T) {
 	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	if r.State != StateFollower {
-		t.Errorf("state = %s, want %s", r.State, StateFollower)
+		t.Errorf("state = %v, want %v", r.State, StateFollower)
 	}
 }
 
@@ -140,12 +140,12 @@ func testNonleaderStartElection(t *testing.T, state StateType) {
 	for i := 1; i < 2*et; i++ {
 		r.tick()
 	}
-
+	// fmt.Println("electionEclapsed: ", r.electionElapsed)
 	if r.Term != 2 {
 		t.Errorf("term = %d, want 2", r.Term)
 	}
 	if r.State != StateCandidate {
-		t.Errorf("state = %s, want %s", r.State, StateCandidate)
+		t.Errorf("state = %v, want %v", r.State, StateCandidate)
 	}
 	if !r.votes[r.id] {
 		t.Errorf("vote for self = false, want true")
@@ -209,8 +209,8 @@ func TestLeaderElectionInOneRoundRPC2AA(t *testing.T) {
 // Reference: section 5.2
 func TestFollowerVote2AA(t *testing.T) {
 	tests := []struct {
-		vote    uint64
-		nvote   uint64
+		vote    uint64 // 之前投的票
+		nvote   uint64 // 现在来的票
 		wreject bool
 	}{
 		{None, 1, false},
@@ -251,13 +251,13 @@ func TestCandidateFallback2AA(t *testing.T) {
 		r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 		if r.State != StateCandidate {
-			t.Fatalf("unexpected state = %s, want %s", r.State, StateCandidate)
+			t.Fatalf("unexpected state = %v, want %v", r.State, StateCandidate)
 		}
 
 		r.Step(tt)
 
 		if g := r.State; g != StateFollower {
-			t.Errorf("#%d: state = %s, want %s", i, g, StateFollower)
+			t.Errorf("#%d: state = %v, want %v", i, g, StateFollower)
 		}
 		if g := r.Term; g != tt.Term {
 			t.Errorf("#%d: term = %d, want %d", i, g, tt.Term)
@@ -280,13 +280,15 @@ func testNonleaderElectionTimeoutRandomized(t *testing.T, state StateType) {
 	r := newTestRaft(1, []uint64{1, 2, 3}, et, 1, NewMemoryStorage())
 	timeouts := make(map[int]bool)
 	for round := 0; round < 50*et; round++ {
+		// fmt.Println("electionElapsed: ", r.electionElapsed)
 		switch state {
 		case StateFollower:
 			r.becomeFollower(r.Term+1, 2)
 		case StateCandidate:
 			r.becomeCandidate()
 		}
-
+		// r.readMessages()
+		// fmt.Println("electiontimeout: ", r.electionTimeout, " msgnum: ", len(r.msgs))
 		time := 0
 		for len(r.readMessages()) == 0 {
 			r.tick()
@@ -323,6 +325,7 @@ func testNonleadersElectionTimeoutNonconflict(t *testing.T, state StateType) {
 	}
 	conflicts := 0
 	for round := 0; round < 1000; round++ {
+		// fmt.Println()
 		for _, r := range rs {
 			switch state {
 			case StateFollower:
@@ -330,6 +333,7 @@ func testNonleadersElectionTimeoutNonconflict(t *testing.T, state StateType) {
 			case StateCandidate:
 				r.becomeCandidate()
 			}
+			// fmt.Println("electionTimeout: ", r.electionTimeout)
 		}
 
 		timeoutNum := 0
@@ -341,6 +345,7 @@ func testNonleadersElectionTimeoutNonconflict(t *testing.T, state StateType) {
 				}
 			}
 		}
+		// fmt.Println("timoutNum: ", timeoutNum)
 		// several rafts time out at the same tick
 		if timeoutNum > 1 {
 			conflicts++
@@ -412,6 +417,7 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	for _, m := range r.readMessages() {
 		r.Step(acceptAndReply(m))
 	}
+	// fmt.Println("applied:", r.RaftLog.applied, "committed:", r.RaftLog.committed)
 
 	if g := r.RaftLog.committed; g != li+1 {
 		t.Errorf("committed = %d, want %d", g, li+1)
@@ -423,6 +429,7 @@ func TestLeaderCommitEntry2AB(t *testing.T) {
 	msgs := r.readMessages()
 	sort.Sort(messageSlice(msgs))
 	for i, m := range msgs {
+		// fmt.Printf("to = %d, want %d\n", m.To, uint64(i+2))
 		if w := uint64(i + 2); m.To != w {
 			t.Errorf("to = %d, want %d", m.To, w)
 		}
@@ -746,7 +753,7 @@ func TestLeaderSyncFollowerLog2AB(t *testing.T) {
 		n.send(pb.Message{From: 3, To: 1, MsgType: pb.MessageType_MsgRequestVoteResponse, Term: term + 1})
 
 		n.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
-
+		// fmt.Printf("\nlead.entries:\n%+v\nfollower.entries:\n%+v\n", lead.RaftLog.entries, follower.RaftLog.entries)
 		if g := diffu(ltoa(lead.RaftLog), ltoa(follower.RaftLog)); g != "" {
 			t.Errorf("#%d: log diff:\n%s", i, g)
 		}
@@ -815,7 +822,7 @@ func TestVoter2AA(t *testing.T) {
 		// same logterm
 		{[]pb.Entry{{Term: 1, Index: 1}}, 1, 1, false},
 		{[]pb.Entry{{Term: 1, Index: 1}}, 1, 2, false},
-		{[]pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}}, 1, 1, true},
+		{[]pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}}, 1, 1, true}, // 虽然他们有相同的日志，但是 Voter 的日志更新
 		// candidate higher logterm
 		{[]pb.Entry{{Term: 1, Index: 1}}, 2, 1, false},
 		{[]pb.Entry{{Term: 1, Index: 1}}, 2, 2, false},
@@ -900,6 +907,7 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 	// simulate the response of MessageType_MsgAppend
 	msgs := r.readMessages()
 	for _, m := range msgs {
+		// fmt.Printf("%v + %v\n", m.MsgType, len(m.Entries))
 		if m.MsgType != pb.MessageType_MsgAppend || len(m.Entries) != 1 || m.Entries[0].Data != nil {
 			panic("not a message to append noop entry")
 		}
@@ -907,9 +915,11 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 	}
 	// ignore further messages to refresh followers' commit index
 	r.readMessages()
+	// fmt.Println("applied:", r.RaftLog.applied, "committed:", r.RaftLog.committed)
 	s.Append(r.RaftLog.unstableEntries())
 	r.RaftLog.applied = r.RaftLog.committed
 	r.RaftLog.stabled = r.RaftLog.LastIndex()
+	// fmt.Println("applied:", r.RaftLog.applied, "committed:", r.RaftLog.committed)
 }
 
 func acceptAndReply(m pb.Message) pb.Message {

@@ -265,6 +265,7 @@ func (bs *Raftstore) startWorkers(peers []*peer) {
 	ctx := bs.ctx
 	workers := bs.workers
 	router := bs.router
+	// 增加两个协程
 	bs.wg.Add(2) // raftWorker, storeWorker
 	rw := newRaftWorker(ctx, router)
 	go rw.run(bs.closeCh, bs.wg)
