@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Connor1996/badger"
 	"github.com/Connor1996/badger/y"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
@@ -95,6 +94,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			}
 
 			cb := seekCallback(d.peer, entry.GetIndex(), entry.GetTerm())
+
 			cmdResp := &raft_cmdpb.RaftCmdResponse{}
 			cmdResp.Header = &raft_cmdpb.RaftResponseHeader{CurrentTerm: rn.Raft.Term}
 
@@ -102,12 +102,14 @@ func (d *peerMsgHandler) HandleRaftReady() {
 				resp := &raft_cmdpb.Response{CmdType: req.CmdType}
 				switch req.CmdType {
 				case raft_cmdpb.CmdType_Get:
+					resp.Get = &raft_cmdpb.GetResponse{}
 					resp.Get.Value, _ = engine_util.GetCF(d.ctx.engine.Kv, req.Get.Cf, req.Get.Key)
 				case raft_cmdpb.CmdType_Put:
 					kvWb.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
 				case raft_cmdpb.CmdType_Delete:
 					kvWb.DeleteCF(req.Delete.Cf, req.Delete.Key)
 				case raft_cmdpb.CmdType_Snap:
+					resp.Snap = &raft_cmdpb.SnapResponse{Region: d.peerStorage.region}
 				}
 				cmdResp.Responses = append(cmdResp.Responses, resp)
 			}
@@ -202,29 +204,36 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
-	if checkRead(msg.Requests) {
-		cmdResp := &raft_cmdpb.RaftCmdResponse{}
-		cmdResp.Header.CurrentTerm = d.Term()
-		_ = d.ctx.engine.Kv.View(func(txn *badger.Txn) error {
-			for _, req := range msg.Requests {
-				resp := &raft_cmdpb.Response{CmdType: req.CmdType}
-				resp.Get.Value, _ = engine_util.GetCFFromTxn(txn, req.Get.Cf, req.Get.Key)
-				cmdResp.Responses = append(cmdResp.Responses, resp)
-			}
-			return nil
-		})
-		cb.Done(cmdResp)
-		return
-	} else if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
+	log.Infof("cmd requests: %+v\n", msg)
+	// 不是 leader 直接返回
+	// if d.Term() != d.peerStorage.raftState.HardState.Term {
+	// 	cb.Done(nil)
+	// 	log.Infof("peer %d is not a leader, the leader is peer %d.\n", d.PeerId(), d.peerStorage.raftState.HardState.Term)
+	// 	return
+	// }
+	// if checkRead(msg.Requests) {
+	// 	cmdResp := &raft_cmdpb.RaftCmdResponse{}
+	// 	cmdResp.Header = &raft_cmdpb.RaftResponseHeader{CurrentTerm: d.Term()}
+	// 	for _, req := range msg.Requests {
+	// 		resp := &raft_cmdpb.Response{CmdType: req.CmdType}
+	// 		resp.Get = &raft_cmdpb.GetResponse{}
+	// 		resp.Get.Value, _ = engine_util.GetCF(d.ctx.engine.Kv, req.Get.Cf, req.Get.Key)
+	// 		cmdResp.Responses = append(cmdResp.Responses, resp)
+	// 	}
+	// 	cb.Done(cmdResp)
+	// 	return
+	// } else if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
+	// 	cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
+	// 	resp := &raft_cmdpb.SnapResponse{Region: d.peerStorage.region}
+	// 	cb.Done(&raft_cmdpb.RaftCmdResponse{
+	// 		Header:    &raft_cmdpb.RaftResponseHeader{},
+	// 		Responses: []*raft_cmdpb.Response{{CmdType: raft_cmdpb.CmdType_Snap, Snap: resp}},
+	// 	})
+	// 	return
+	// }
+	if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
 		cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
-		resp := &raft_cmdpb.SnapResponse{Region: d.peerStorage.region}
-		cb.Done(&raft_cmdpb.RaftCmdResponse{
-			Header:    &raft_cmdpb.RaftResponseHeader{},
-			Responses: []*raft_cmdpb.Response{{CmdType: raft_cmdpb.CmdType_Snap, Snap: resp}},
-		})
-		return
 	}
-
 	cmd, _ := msg.Marshal()
 	d.peer.proposals = append(d.peer.proposals, &proposal{
 		index: d.peer.nextProposalIndex(),

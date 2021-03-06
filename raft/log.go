@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -85,6 +86,13 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	offset, _ := l.storage.FirstIndex()
 	// fmt.Println("len:", len(l.entries), "stabled:", l.stabled, "offset:", offset)
 	return l.entries[int(l.stabled-offset+1):]
+}
+
+func (l *RaftLog) NextEnts() ([]pb.Entry, error) {
+	if l.applied > l.committed {
+		return nil, new(util.ErrStaleCommand)
+	}
+	return l.nextEnts(), nil
 }
 
 // nextEnts returns all the committed but not applied entries

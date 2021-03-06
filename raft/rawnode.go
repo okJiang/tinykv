@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"log"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -179,7 +180,11 @@ func (rn *RawNode) Ready() Ready {
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-	if len(rn.Raft.RaftLog.unstableEntries()) != 0 || len(rn.Raft.RaftLog.nextEnts()) != 0 || len(rn.Raft.msgs) != 0 {
+	ents, err := rn.Raft.RaftLog.NextEnts()
+	if err != nil {
+		log.Fatalf("peer: %d, log: %+v nextEtries error\n", rn.Raft.id, rn.Raft.RaftLog)
+	}
+	if len(rn.Raft.RaftLog.unstableEntries()) != 0 || len(ents) != 0 || len(rn.Raft.msgs) != 0 {
 		// fmt.Println(1)
 		return true
 	}

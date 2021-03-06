@@ -372,6 +372,7 @@ func (c *Cluster) Scan(start, end []byte) [][]byte {
 		if resp.Responses[0].CmdType != raft_cmdpb.CmdType_Snap {
 			panic("resp.Responses[0].CmdType != raft_cmdpb.CmdType_Snap")
 		}
+		// 实际在下面利用回调的 txn 进行 scan 的操作
 		region := resp.Responses[0].GetSnap().Region
 		iter := raft_storage.NewRegionReader(txn, *region).IterCF(engine_util.CfDefault)
 		for iter.Seek(key); iter.Valid(); iter.Next() {

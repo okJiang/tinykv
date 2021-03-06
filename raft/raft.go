@@ -19,6 +19,7 @@ import (
 	"errors"
 	"math/rand"
 
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -220,6 +221,10 @@ func (r *Raft) sendAppend(to uint64) bool {
 	offset, _ := r.RaftLog.storage.FirstIndex()
 	for i := r.Prs[to].Next; i <= r.RaftLog.LastIndex(); i++ {
 		// fmt.Println("peer:", r.id, "Next:", i, "offset:", offset)
+		// 什么情况 i < offset 呢
+		// if i < offset {
+		// 	i = offset
+		// }
 		ents = append(ents, &r.RaftLog.entries[i-offset])
 	}
 	// fmt.Println("appendEntries:", ents)
@@ -345,6 +350,7 @@ func (r *Raft) becomeLeader() {
 		Term:  r.Term,
 	})
 	// r.Step(pb.Message{From: r.id, To: r.id, Term: r.Term, MsgType: pb.MessageType_MsgBeat})
+	log.Infof("peer: %d successed become leader", r.id)
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -643,6 +649,10 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 	}
 	r.RaftLog.committed = min(m.Commit, m.Index+(uint64)(len(m.Entries)))
+	if r.RaftLog.committed < r.RaftLog.applied {
+		r.RaftLog.applied = r.RaftLog.committed
+	}
+	// r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 
 	// fmt.Println("committed:", m.Commit)
 	r.sendAppendResponse(m)
@@ -690,22 +700,11 @@ func (r *Raft) handleVote(m pb.Message) {
 				} else {
 					m.Reject = false
 				}
-			} else if term < m.LogTerm {
+			} else if term+1 <= m.LogTerm {
 				// fmt.Println(3)
 				m.Reject = false
-			} else if term > m.LogTerm {
-				// fmt.Println(4)
-				m.Reject = true
-				// } else if r.RaftLog.LastIndex() == m.Index {
-				// 	// 5 和 8 是一样的
-				// 	fmt.Println(5)
-				// 	if r.Vote == None || r.Vote == m.From {
-				// 		reject = false
-				// 	} else if r.Vote != m.From && r.Term == m.Term {
-				// 		reject = true
-				// 	}
 			} else {
-				// fmt.Println(6)
+				// fmt.Println(4)
 				m.Reject = true
 			}
 		} else {
@@ -744,6 +743,9 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.Lead = m.From
 	r.electionElapsed = 0
 	r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+	if r.RaftLog.committed < r.RaftLog.applied {
+		r.RaftLog.applied = r.RaftLog.committed
+	}
 
 	r.msgs = append(r.msgs, pb.Message{
 		From:    r.id,
