@@ -204,7 +204,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
-	log.Infof("cmd requests: %+v\n", msg)
+	// log.Infof("cmd requests: %+v\n", msg)
 	// 不是 leader 直接返回
 	// if d.Term() != d.peerStorage.raftState.HardState.Term {
 	// 	cb.Done(nil)

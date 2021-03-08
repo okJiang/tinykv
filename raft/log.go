@@ -78,6 +78,20 @@ func newLog(storage Storage) *RaftLog {
 // grow unlimitedly in memory
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
+	offset := l.entries[0].Index
+
+	i := l.pendingSnapshot.Metadata.Index - offset + 1
+
+	if i == uint64(len(l.entries)) {
+		l.entries = make([]pb.Entry, 0)
+		return
+	}
+
+	ents := make([]pb.Entry, 1, uint64(len(l.entries))-i)
+	ents[0].Index = l.entries[i].Index
+	ents[0].Term = l.entries[i].Term
+	ents = append(ents, l.entries[i+1:]...)
+	l.entries = ents
 }
 
 // unstableEntries return all the unstable entries
@@ -113,18 +127,30 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	// fmt.Println(l.entries[0].Index, len(l.entries))
+	// l.maybeCompact()
 	offset, _ := l.storage.FirstIndex()
-	// log.Info("firstIndex:", first)
-	// if len(l.entries) == 0 {
-	// 	return first - 1
-	// }
-	return offset + uint64(len(l.entries)) - 1
+	lastIndex := offset + uint64(len(l.entries)) - 1
+	// lastIndex, _ := l.storage.LastIndex()
+	if l.pendingSnapshot != nil && lastIndex < l.pendingSnapshot.Metadata.Index {
+		return l.pendingSnapshot.Metadata.Index
+	}
+	return lastIndex
+}
+
+func (l *RaftLog) firstIndex() uint64 {
+	offset, _ := l.storage.FirstIndex()
+	if l.pendingSnapshot != nil && offset <= l.pendingSnapshot.Metadata.Index {
+		return l.pendingSnapshot.Metadata.Index + 1
+	}
+	return offset
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
+	if l.pendingSnapshot != nil && i == l.pendingSnapshot.Metadata.Index {
+		return l.pendingSnapshot.Metadata.Term, nil
+	}
 	if len(l.entries) == 0 {
 		return 0, ErrUnavailable
 	}
@@ -149,4 +175,12 @@ func (l *RaftLog) Entry(i uint64) (*pb.Entry, error) {
 		return nil, ErrUnavailable
 	}
 	return &l.entries[i-offset], nil
+}
+
+func (l *RaftLog) SnapshotIndex() uint64 {
+	return l.pendingSnapshot.Metadata.Index
+}
+
+func (l *RaftLog) SnapshotTerm() uint64 {
+	return l.pendingSnapshot.Metadata.Term
 }

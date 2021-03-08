@@ -218,7 +218,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 	var ents []*pb.Entry
 	// 需要传 [pr.Next:], 不能直接传 m.entries
-	offset, _ := r.RaftLog.storage.FirstIndex()
+	offset := r.RaftLog.firstIndex()
 	for i := r.Prs[to].Next; i <= r.RaftLog.LastIndex(); i++ {
 		// fmt.Println("peer:", r.id, "Next:", i, "offset:", offset)
 		// 什么情况 i < offset 呢
@@ -239,6 +239,30 @@ func (r *Raft) sendAppend(to uint64) bool {
 		MsgType: pb.MessageType_MsgAppend,
 		Entries: ents,
 		Commit:  r.RaftLog.committed,
+	})
+
+	return false
+}
+
+func (r *Raft) sendSnap(to uint64) bool {
+	// Your Code Here (2A).
+	var ents []*pb.Entry
+
+	offset := r.RaftLog.firstIndex()
+	for i := offset; i <= r.RaftLog.LastIndex(); i++ {
+		ents = append(ents, &r.RaftLog.entries[i-offset])
+	}
+
+	r.msgs = append(r.msgs, pb.Message{
+		From:     r.id,
+		To:       to,
+		Term:     r.Term,
+		Index:    r.RaftLog.SnapshotIndex(),
+		LogTerm:  r.RaftLog.SnapshotTerm(),
+		MsgType:  pb.MessageType_MsgSnapshot,
+		Entries:  ents,
+		Commit:   r.RaftLog.committed,
+		Snapshot: r.RaftLog.pendingSnapshot,
 	})
 
 	return false
@@ -350,14 +374,14 @@ func (r *Raft) becomeLeader() {
 		Term:  r.Term,
 	})
 	// r.Step(pb.Message{From: r.id, To: r.id, Term: r.Term, MsgType: pb.MessageType_MsgBeat})
-	log.Infof("peer: %d successed become leader", r.id)
+	// log.Infof("peer: %d successed become leader", r.id)
 }
 
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	// log.Infof("message: \n%+v\n", m)
+	log.Debugf("message: \n%+v\n", m)
 	// if m.Term > r.Term {
 	// 	r.becomeFollower(m.Term, m.From)
 	// }
@@ -383,6 +407,8 @@ func (r *Raft) Step(m pb.Message) error {
 			r.handleVote(m)
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
+		case pb.MessageType_MsgSnapshot:
+			r.handleSnapshot(m)
 		}
 	case StateCandidate:
 		switch m.MsgType {
@@ -441,7 +467,11 @@ func (r *Raft) Step(m pb.Message) error {
 	case StateLeader:
 		switch m.MsgType {
 		case pb.MessageType_MsgBeat:
-
+			snapshot, _ := r.RaftLog.storage.Snapshot()
+			if len(r.RaftLog.entries) > 0 && snapshot.Metadata != nil && snapshot.Metadata.Index > r.RaftLog.entries[0].Index {
+				r.RaftLog.pendingSnapshot = &snapshot
+				r.RaftLog.maybeCompact()
+			}
 			for peer := range r.votes {
 				if peer == r.id {
 					// r.Prs[r.id].Match = r.RaftLog.LastIndex()
@@ -468,7 +498,12 @@ func (r *Raft) Step(m pb.Message) error {
 					r.Prs[r.id].Next = r.RaftLog.LastIndex() + 1
 					continue
 				}
-				r.sendAppend(peer)
+				firstIndex := r.RaftLog.firstIndex()
+				if firstIndex > r.Prs[peer].Next {
+					r.sendSnap(peer)
+				} else {
+					r.sendAppend(peer)
+				}
 			}
 			if len(r.Prs) == 1 {
 				r.RaftLog.committed = r.RaftLog.LastIndex()
@@ -531,7 +566,12 @@ func (r *Raft) Step(m pb.Message) error {
 						if peer == r.id {
 							continue
 						}
-						r.sendAppend(peer)
+						firstIndex := r.RaftLog.firstIndex()
+						if firstIndex > r.Prs[peer].Next {
+							r.sendSnap(peer)
+						} else {
+							r.sendAppend(peer)
+						}
 						// fmt.Println("To", peer)
 					}
 				}
@@ -545,7 +585,8 @@ func (r *Raft) Step(m pb.Message) error {
 		// case pb.MessageType_MsgHeartbeat:
 		// 	r.handleHeartbeat(m)
 		case pb.MessageType_MsgHeartbeatResponse:
-			if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
+			offset := r.RaftLog.firstIndex()
+			if r.Prs[m.From].Match < r.RaftLog.LastIndex() && offset <= r.Prs[m.From].Next {
 				r.sendAppend(m.From)
 			}
 		}
@@ -757,6 +798,26 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+	}
+
+	if m.Snapshot.Metadata.Index < r.RaftLog.committed {
+		return
+	}
+	r.RaftLog.pendingSnapshot = m.Snapshot
+	r.Prs = make(map[uint64]*Progress)
+	for _, peer := range m.Snapshot.Metadata.ConfState.Nodes {
+		r.Prs[peer] = &Progress{
+			Match: 0,
+			Next:  r.RaftLog.LastIndex() + 1,
+		}
+		if peer == r.id {
+			r.Prs[peer].Match = r.Prs[peer].Next - 1
+		}
+	}
+
+	r.sendAppendResponse(m)
 }
 
 // addNode add a new node to raft group

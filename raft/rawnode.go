@@ -214,6 +214,7 @@ func (rn *RawNode) Advance(rd Ready) {
 
 	rn.Raft.RaftLog.stabled = rn.Raft.RaftLog.LastIndex()
 	rn.Raft.RaftLog.applied = rn.Raft.RaftLog.committed
+	// rn.Raft.RaftLog.maybeCompact()
 }
 
 // GetProgress return the the Progress of this node and its peers, if this
