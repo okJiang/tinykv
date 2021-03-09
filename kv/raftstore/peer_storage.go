@@ -328,7 +328,14 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
-	return nil, nil
+	result := &ApplySnapResult{
+		PrevRegion: ps.region,
+		Region:     snapData.Region,
+	}
+	ps.regionSched <- &runner.RegionTaskApply{}
+	err := ps.clearMeta(kvWB, raftWB)
+	ps.clearExtraData(snapData.Region)
+	return result, err
 }
 
 // SaveReadyState save memory states to disk.
@@ -346,11 +353,11 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		raftWB.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
 	}
 
-	ps.Engines.WriteRaft(raftWB)
+	kvWB := new(engine_util.WriteBatch)
+	result, err := ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
 
-	// kvWB := new(engine_util.WriteBatch)
-	// result, _ := ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
-	return nil, nil
+	ps.Engines.WriteRaft(raftWB)
+	return result, err
 }
 
 // ClearData clear all data
@@ -364,4 +371,14 @@ func (ps *PeerStorage) clearRange(regionID uint64, start, end []byte) {
 		StartKey: start,
 		EndKey:   end,
 	}
+}
+
+func (ps *PeerStorage) modifyTruncatedStates(compactIndex, compactTerm uint64) bool {
+	ps.applyState.TruncatedState.Index = compactIndex
+	ps.applyState.TruncatedState.Term = compactTerm
+	err := engine_util.PutMeta(ps.Engines.Kv, meta.ApplyStateKey(ps.region.Id), ps.applyState)
+	if err != nil {
+		return false
+	}
+	return true
 }

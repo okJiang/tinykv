@@ -1086,11 +1086,13 @@ func TestSlowNodeRestore2C(t *testing.T) {
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
 
 	// trigger a snapshot
+	// beginning generate snapshots
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 
 	follower := nt.peers[3].(*Raft)
 
 	// trigger a commit
+	// really send snapshots
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 	if follower.RaftLog.committed != lead.RaftLog.committed {
 		t.Errorf("follower.committed = %d, want %d", follower.RaftLog.committed, lead.RaftLog.committed)

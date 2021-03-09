@@ -19,7 +19,6 @@ import (
 	"errors"
 	"math/rand"
 
-	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -216,55 +215,37 @@ func newRaft(c *Config) *Raft {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	var ents []*pb.Entry
-	// 需要传 [pr.Next:], 不能直接传 m.entries
-	offset := r.RaftLog.firstIndex()
-	for i := r.Prs[to].Next; i <= r.RaftLog.LastIndex(); i++ {
-		// fmt.Println("peer:", r.id, "Next:", i, "offset:", offset)
-		// 什么情况 i < offset 呢
-		// if i < offset {
-		// 	i = offset
-		// }
-		ents = append(ents, &r.RaftLog.entries[i-offset])
-	}
-	// fmt.Println("appendEntries:", ents)
-	// fmt.Println("peer:", r.id, "Next:", r.Prs[to].Next)
-	logTerm, _ := r.RaftLog.Term(r.Prs[to].Next - 1)
-	r.msgs = append(r.msgs, pb.Message{
-		From:    r.id,
-		To:      to,
-		Term:    r.Term,
-		Index:   r.Prs[to].Next - 1,
-		LogTerm: logTerm,
-		MsgType: pb.MessageType_MsgAppend,
-		Entries: ents,
-		Commit:  r.RaftLog.committed,
-	})
+	offset, _ := r.RaftLog.FirstIndex()
 
-	return false
-}
-
-func (r *Raft) sendSnap(to uint64) bool {
-	// Your Code Here (2A).
-	var ents []*pb.Entry
-
-	offset := r.RaftLog.firstIndex()
-	for i := offset; i <= r.RaftLog.LastIndex(); i++ {
-		ents = append(ents, &r.RaftLog.entries[i-offset])
+	m := pb.Message{
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Commit: r.RaftLog.committed,
 	}
 
-	r.msgs = append(r.msgs, pb.Message{
-		From:     r.id,
-		To:       to,
-		Term:     r.Term,
-		Index:    r.RaftLog.SnapshotIndex(),
-		LogTerm:  r.RaftLog.SnapshotTerm(),
-		MsgType:  pb.MessageType_MsgSnapshot,
-		Entries:  ents,
-		Commit:   r.RaftLog.committed,
-		Snapshot: r.RaftLog.pendingSnapshot,
-	})
+	if offset > r.Prs[to].Next {
+		snapshot, err := r.RaftLog.storage.Snapshot()
+		if err != nil {
+			m.Snapshot = r.RaftLog.pendingSnapshot
+		} else {
+			m.Snapshot = &snapshot
+		}
+		m.Index, _ = r.RaftLog.SnapshotIndex()
+		m.Term, _ = r.RaftLog.SnapshotTerm()
+		m.MsgType = pb.MessageType_MsgSnapshot
+	} else {
+		m.Index = r.Prs[to].Next - 1
+		m.LogTerm, _ = r.RaftLog.Term(m.Index)
+		m.MsgType = pb.MessageType_MsgAppend
+		m.Snapshot = nil
+		lastIndex := r.RaftLog.LastIndex()
+		for i := r.Prs[to].Next; i <= lastIndex; i++ {
+			m.Entries = append(m.Entries, &r.RaftLog.entries[i-offset])
+		}
+	}
 
+	r.msgs = append(r.msgs, m)
 	return false
 }
 
@@ -357,20 +338,21 @@ func (r *Raft) becomeLeader() {
 	r.Vote = None
 	r.Lead = r.id
 
+	lastIndex := r.RaftLog.LastIndex()
 	for peer := range r.Prs {
 		if peer == r.id {
-			r.Prs[peer].Match = r.RaftLog.LastIndex() + 1
-			r.Prs[peer].Next = r.RaftLog.LastIndex() + 2
+			r.Prs[peer].Match = lastIndex + 1
+			r.Prs[peer].Next = lastIndex + 2
 		} else {
 			r.Prs[peer].Match, _ = r.RaftLog.storage.FirstIndex()
 			r.Prs[peer].Match--
-			r.Prs[peer].Next = r.RaftLog.LastIndex() + 1
+			r.Prs[peer].Next = lastIndex + 1
 		}
 	}
 
 	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{
 		// EntryType: pb.EntryType_EntryNormal,
-		Index: r.RaftLog.LastIndex() + 1,
+		Index: lastIndex + 1,
 		Term:  r.Term,
 	})
 	// r.Step(pb.Message{From: r.id, To: r.id, Term: r.Term, MsgType: pb.MessageType_MsgBeat})
@@ -381,7 +363,7 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	log.Debugf("message: \n%+v\n", m)
+	// log.Infof("message: \n%+v\n", m)
 	// if m.Term > r.Term {
 	// 	r.becomeFollower(m.Term, m.From)
 	// }
@@ -467,11 +449,11 @@ func (r *Raft) Step(m pb.Message) error {
 	case StateLeader:
 		switch m.MsgType {
 		case pb.MessageType_MsgBeat:
-			snapshot, _ := r.RaftLog.storage.Snapshot()
-			if len(r.RaftLog.entries) > 0 && snapshot.Metadata != nil && snapshot.Metadata.Index > r.RaftLog.entries[0].Index {
-				r.RaftLog.pendingSnapshot = &snapshot
-				r.RaftLog.maybeCompact()
-			}
+			// snapshot, _ := r.RaftLog.storage.Snapshot()
+			// if len(r.RaftLog.entries) > 0 && snapshot.Metadata != nil && snapshot.Metadata.Index > r.RaftLog.entries[0].Index {
+			// 	r.RaftLog.pendingSnapshot = &snapshot
+			// 	r.RaftLog.maybeCompact()
+			// }
 			for peer := range r.votes {
 				if peer == r.id {
 					// r.Prs[r.id].Match = r.RaftLog.LastIndex()
@@ -486,27 +468,24 @@ func (r *Raft) Step(m pb.Message) error {
 		case pb.MessageType_MsgPropose:
 			// appendEntry
 			for _, ent := range m.Entries {
-				ent.Index = r.RaftLog.LastIndex() + 1
+				ent.Index = r.RaftLog.LastIndex()
+				ent.Index++
 				ent.Term = r.Term
 				ent.EntryType = pb.EntryType_EntryNormal
 				r.RaftLog.entries = append(r.RaftLog.entries, *ent)
 			}
 			// bcastAppend
+			lastIndex := r.RaftLog.LastIndex()
 			for peer := range r.Prs {
 				if peer == r.id {
-					r.Prs[r.id].Match = r.RaftLog.LastIndex()
-					r.Prs[r.id].Next = r.RaftLog.LastIndex() + 1
+					r.Prs[r.id].Match = lastIndex
+					r.Prs[r.id].Next = lastIndex + 1
 					continue
 				}
-				firstIndex := r.RaftLog.firstIndex()
-				if firstIndex > r.Prs[peer].Next {
-					r.sendSnap(peer)
-				} else {
-					r.sendAppend(peer)
-				}
+				r.sendAppend(peer)
 			}
 			if len(r.Prs) == 1 {
-				r.RaftLog.committed = r.RaftLog.LastIndex()
+				r.RaftLog.committed = lastIndex
 			}
 		case pb.MessageType_MsgAppend:
 			if m.Term > r.Term {
@@ -566,13 +545,8 @@ func (r *Raft) Step(m pb.Message) error {
 						if peer == r.id {
 							continue
 						}
-						firstIndex := r.RaftLog.firstIndex()
-						if firstIndex > r.Prs[peer].Next {
-							r.sendSnap(peer)
-						} else {
-							r.sendAppend(peer)
-						}
-						// fmt.Println("To", peer)
+
+						r.sendAppend(peer)
 					}
 				}
 				// fmt.Println("committed =", r.RaftLog.committed)
@@ -585,13 +559,27 @@ func (r *Raft) Step(m pb.Message) error {
 		// case pb.MessageType_MsgHeartbeat:
 		// 	r.handleHeartbeat(m)
 		case pb.MessageType_MsgHeartbeatResponse:
-			offset := r.RaftLog.firstIndex()
-			if r.Prs[m.From].Match < r.RaftLog.LastIndex() && offset <= r.Prs[m.From].Next {
+			offset, err := r.RaftLog.FirstIndex()
+			lastIndex := r.RaftLog.LastIndex()
+			if err != nil {
+				break
+			}
+			if r.Prs[m.From].Match < lastIndex && offset <= r.Prs[m.From].Next {
 				r.sendAppend(m.From)
 			}
 		}
 	}
 	return nil
+}
+
+func (r *Raft) checkSnap() bool {
+	firstIndex, _ := r.RaftLog.FirstIndex()
+	for peer := range r.Prs {
+		if firstIndex > r.Prs[peer].Next {
+			return true
+		}
+	}
+	return false
 }
 
 // sendAppendResponse
@@ -662,18 +650,19 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	// 如果成功
 	// fmt.Println("successed find")
-	flag := false
+	succeed := false
 
 	for _, ent := range m.Entries {
 
 		index++
-		if index > r.RaftLog.LastIndex() {
-			flag = true
+		lastIndex := r.RaftLog.LastIndex()
+		if index > lastIndex {
+			succeed = true
 		}
 
 		// fmt.Println("index =", index, "len:", len(r.RaftLog.entries))
 
-		if flag {
+		if succeed {
 			// fmt.Println("++++++++")
 			r.RaftLog.entries = append(r.RaftLog.entries, *ent)
 		} else {
@@ -685,7 +674,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 				offset := r.RaftLog.entries[0].Index
 				r.RaftLog.entries = append(r.RaftLog.entries[:index-offset], *ent)
 				r.RaftLog.stabled = index - 1
-				flag = true
+				succeed = true
 			}
 		}
 	}
@@ -731,11 +720,12 @@ func (r *Raft) handleVote(m pb.Message) {
 		r.becomeFollower(m.Term, None)
 	}
 	if m.LogTerm <= m.Term {
-		if m.Index < r.RaftLog.LastIndex() {
+		lastIndex := r.RaftLog.LastIndex()
+		if m.Index < lastIndex {
 			term, err := r.RaftLog.Term(m.Index)
 			if err == ErrCompacted {
 				// fmt.Println(2)
-				lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
+				lastTerm, _ := r.RaftLog.Term(lastIndex)
 				if lastTerm >= m.LogTerm {
 					m.Reject = true
 				} else {
@@ -749,7 +739,7 @@ func (r *Raft) handleVote(m pb.Message) {
 				m.Reject = true
 			}
 		} else {
-			lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
+			lastTerm, _ := r.RaftLog.Term(lastIndex)
 			if lastTerm > m.LogTerm {
 				// fmt.Println(7)
 				m.Reject = true
@@ -783,7 +773,8 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 
 	r.Lead = m.From
 	r.electionElapsed = 0
-	r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+	lastIndex := r.RaftLog.LastIndex()
+	r.RaftLog.committed = min(m.Commit, lastIndex)
 	if r.RaftLog.committed < r.RaftLog.applied {
 		r.RaftLog.applied = r.RaftLog.committed
 	}
@@ -805,12 +796,14 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	if m.Snapshot.Metadata.Index < r.RaftLog.committed {
 		return
 	}
+	r.RaftLog.committed = max(r.RaftLog.committed, m.Commit)
 	r.RaftLog.pendingSnapshot = m.Snapshot
 	r.Prs = make(map[uint64]*Progress)
+	lastIndex := r.RaftLog.LastIndex()
 	for _, peer := range m.Snapshot.Metadata.ConfState.Nodes {
 		r.Prs[peer] = &Progress{
 			Match: 0,
-			Next:  r.RaftLog.LastIndex() + 1,
+			Next:  lastIndex + 1,
 		}
 		if peer == r.id {
 			r.Prs[peer].Match = r.Prs[peer].Next - 1

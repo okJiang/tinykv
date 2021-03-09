@@ -68,7 +68,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 	if rn.HasReady() {
 		rd := rn.Ready()
-		// log.Infof("peerId: %d, start ready: %+v\n", d.PeerId(), rd)
+		log.Infof("peerId: %d, start ready: %+v\n", d.PeerId(), rd)
 		d.peer.peerStorage.SaveReadyState(&rd)
 
 		// 假设 Term 发生了变化，即 leader 发生了改变
@@ -205,32 +205,21 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	}
 	// Your Code Here (2B).
 	// log.Infof("cmd requests: %+v\n", msg)
-	// 不是 leader 直接返回
-	// if d.Term() != d.peerStorage.raftState.HardState.Term {
-	// 	cb.Done(nil)
-	// 	log.Infof("peer %d is not a leader, the leader is peer %d.\n", d.PeerId(), d.peerStorage.raftState.HardState.Term)
-	// 	return
-	// }
-	// if checkRead(msg.Requests) {
-	// 	cmdResp := &raft_cmdpb.RaftCmdResponse{}
-	// 	cmdResp.Header = &raft_cmdpb.RaftResponseHeader{CurrentTerm: d.Term()}
-	// 	for _, req := range msg.Requests {
-	// 		resp := &raft_cmdpb.Response{CmdType: req.CmdType}
-	// 		resp.Get = &raft_cmdpb.GetResponse{}
-	// 		resp.Get.Value, _ = engine_util.GetCF(d.ctx.engine.Kv, req.Get.Cf, req.Get.Key)
-	// 		cmdResp.Responses = append(cmdResp.Responses, resp)
-	// 	}
-	// 	cb.Done(cmdResp)
-	// 	return
-	// } else if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
-	// 	cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
-	// 	resp := &raft_cmdpb.SnapResponse{Region: d.peerStorage.region}
-	// 	cb.Done(&raft_cmdpb.RaftCmdResponse{
-	// 		Header:    &raft_cmdpb.RaftResponseHeader{},
-	// 		Responses: []*raft_cmdpb.Response{{CmdType: raft_cmdpb.CmdType_Snap, Snap: resp}},
-	// 	})
-	// 	return
-	// }
+
+	adminRequest := msg.GetAdminRequest()
+	if adminRequest != nil {
+		switch adminRequest.CmdType {
+		case raft_cmdpb.AdminCmdType_ChangePeer:
+		case raft_cmdpb.AdminCmdType_CompactLog:
+			d.handleCompactLog(adminRequest.CompactLog)
+			firstIndex, _ := d.RaftGroup.Raft.RaftLog.FirstIndex()
+			d.ScheduleCompactLog(firstIndex, d.peerStorage.truncatedIndex())
+		case raft_cmdpb.AdminCmdType_InvalidAdmin:
+		case raft_cmdpb.AdminCmdType_Split:
+		}
+
+		return
+	}
 	if msg.Requests[0].CmdType == raft_cmdpb.CmdType_Snap {
 		cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
 	}
@@ -241,7 +230,10 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb:    cb,
 	})
 	d.peer.RaftGroup.Propose(cmd)
+}
 
+func (d *peerMsgHandler) handleCompactLog(msg *raft_cmdpb.CompactLogRequest) {
+	d.peerStorage.modifyTruncatedStates(msg.CompactIndex, msg.CompactTerm)
 }
 
 func (d *peerMsgHandler) onTick() {
